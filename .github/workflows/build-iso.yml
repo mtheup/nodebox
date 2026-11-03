@@ -1,0 +1,47 @@
+name: Build NodeBox ISO
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: "Arquitetura da ISO"
+        type: choice
+        options:
+          - amd64
+          - arm64
+        default: amd64
+
+jobs:
+  build:
+    runs-on: ${{ inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    container:
+      image: debian:trixie
+      options: --privileged
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ISO
+        run: |
+          apt-get update
+          apt-get install -y sudo
+          chmod +x build.sh
+          ./build.sh "${{ inputs.arch }}"
+
+      - name: Upload ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodebox-${{ inputs.arch }}-iso
+          path: |
+            *.iso
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ inputs.arch }}
+          path: build.log
+          if-no-files-found: ignore
