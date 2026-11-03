@@ -11,11 +11,15 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+PKGS="live-build debootstrap squashfs-tools xorriso mtools dosfstools"
+case "$(dpkg --print-architecture)" in
+    amd64) PKGS="$PKGS grub-pc-bin grub-efi-amd64-bin" ;;
+    arm64) PKGS="$PKGS grub-efi-arm64-bin" ;;
+esac
+
 echo ">> Instalando dependências de build..."
 apt-get update
-apt-get install -y live-build debootstrap squashfs-tools xorriso \
-    grub-pc-bin grub-efi-amd64-bin grub-efi-arm64-bin mtools dosfstools \
-    qemu-user-static binfmt-support
+apt-get install -y $PKGS
 
 chmod +x auto/config config/hooks/live/*.hook.chroot
 
