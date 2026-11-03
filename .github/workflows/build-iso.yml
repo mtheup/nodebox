@@ -13,6 +13,7 @@ on:
 
 jobs:
   build:
+    # arm64 roda em runner ARM nativo (sem emulação)
     runs-on: ${{ inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     container:
       image: debian:trixie
