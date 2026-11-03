@@ -1,47 +1,62 @@
-# NodeBox — distro Linux simples para servidor Node.js
+# NodeBox 0.5.1.b
 
-Base: **Debian 13 (trixie)** via `live-build`. Desktop: **i3** (mínimo, opcional no dia a dia).
-Pensada para uma máquina de **2 vCPU / 12 GB RAM**.
+Distro enxuta baseada em Debian 13 (trixie), feita para rodar servidores Node.js
+com pouca memória (pensada para 2 vCPU / 12 GB). Construída com `live-build`.
 
-## O que vem na ISO
+## Entrar
 
-- Node.js + npm, e globalmente: pm2, yarn, pnpm
-- nginx (proxy reverso) + certbot (SSL)
-- openssh-server endurecido, ufw, fail2ban, unattended-upgrades, chrony
-- sysctl e limites de arquivos ajustados para servidor
-- i3 + lightdm + firefox-esr para uso gráfico local
-- Diretório `/srv/apps` para seus projetos
+- Usuário: `node` — senha: `node` (tem `sudo`; **troque com `passwd`**)
+- Teclado ABNT2, fuso America/Sao_Paulo
 
-## Como gerar a ISO
+## Menu de boot
 
-Numa máquina Debian/Ubuntu (ou VM/WSL2) com internet:
+- **Live system**: sobe o sistema; no tty1, depois do login, o i3 abre sozinho.
+- **Live CLI (sem interface grafica)**: só terminal, o i3 não é iniciado (parâmetro `nbmode=cli`).
 
-```bash
-cd nodebox
-sudo ./build.sh amd64     # PCs / VMs comuns
-sudo ./build.sh arm64     # Oracle Ampere A1, Raspberry etc.
+Nos dois modos há um segundo terminal em `Ctrl+Alt+F2` (no VirtualBox: Ctrl direito + F2).
+
+## Ferramentas `nb`
+
+```
+nb status                       memória, disco, portas, apps e serviços com falha
+nb mem [N]                      maiores consumidores de memória
+nb app create <nome> [--port N] [--mem MB] [--entry arquivo.js]
+nb app list | start | stop | restart | status | logs [-f] | rm
+nb proxy add <dominio> <porta>  site no nginx apontando para o app
+nb ssl <dominio> [email]        HTTPS com certbot (instala na hora)
+nb fw setup                     firewall: libera 22, 80 e 443
+nb ssh addkey "<chave>"         cadastra chave pública
+nb ssh harden                   desliga login por senha
+nb swap create 2G               swap (só após instalar em disco)
+nb backup                       compacta /srv/apps
+nb update                       atualiza o sistema
+nb install <extra>              fail2ban, certbot, build-tools, redis, postgres, ...
 ```
 
-A ISO sai na pasta `nodebox/` (`nodebox-*.iso`).
+Apps rodam como serviços systemd (sem pm2), com limite de memória por app.
+Coloque o código em `/srv/apps/<nome>` e use `nb app create <nome>`.
 
-## Primeiro uso
+## O que foi cortado para economizar memória
 
-- Usuário: `node` / senha: `node` (tem sudo) — **troque com `passwd`**
-- Teste antes no QEMU: `qemu-system-x86_64 -m 4096 -cdrom nodebox-amd64.hybrid.iso`
-- Para iniciar o i3 no terminal: `startx`
+Sem gerenciador de login (lightdm), navegador, NetworkManager, chrony, fail2ban,
+unattended-upgrades, certbot, build-essential e pm2 instalados por padrão.
+Rede com systemd-networkd, hora com systemd-timesyncd, logs só em RAM (máx. 32 MB),
+2 consoles, timers de apt desligados. Tudo que foi cortado pode voltar com `nb install`.
+
+## Gerar a ISO
+
+Pelo GitHub Actions (aba Actions → Build NodeBox ISO → Run workflow) ou localmente:
+
+```bash
+sudo ./build.sh amd64      # ou arm64
+```
 
 ## Estrutura
 
 ```
-auto/config                     parâmetros do live-build
-config/package-lists/           pacotes instalados
-config/hooks/live/              scripts rodados dentro da imagem
-config/includes.chroot/         arquivos copiados para o sistema (ssh, sysctl, i3, motd)
-build.sh                        script de build
+auto/config                              parâmetros do live-build
+config/package-lists/                    pacotes instalados
+config/hooks/live/*.hook.chroot          scripts rodados dentro da imagem (ordem numérica)
+config/hooks/live/0900-live-cli.hook.binary   adiciona "Live CLI" nos menus de boot
+config/includes.chroot/                  arquivos copiados para o sistema (nb, nb-health, i3, systemd, ssh)
 ```
-
-## Observações
-
-- A ISO é um sistema **live**. Para instalar em disco, o instalador do Debian pode ser
-  adicionado depois (`--debian-installer live` já está configurado).
-- Em nuvem (ex.: Oracle), normalmente se usa imagem de disco, não ISO; posso gerar uma variante `.qcow2` / `.img`.

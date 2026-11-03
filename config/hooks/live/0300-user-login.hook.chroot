@@ -10,7 +10,4 @@ id node >/dev/null 2>&1 || useradd -m -s /bin/bash -G sudo node
 echo "node:node" | chpasswd
 passwd -l root || true
 
-echo "nodebox" > /etc/hostname
-echo "127.0.1.1 nodebox" >> /etc/hosts
-
 chown node:node /srv/apps || true

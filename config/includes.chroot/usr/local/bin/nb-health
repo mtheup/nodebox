@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+"""nb-health — resumo rápido da saúde do servidor NodeBox (só biblioteca padrão)."""
+import argparse
+import json
+import os
+import shutil
+import socket
+import subprocess
+import sys
+
+WARN_MEM = 85   # % de memória usada
+WARN_DISK = 85  # % de disco usado
+
+
+def run(cmd):
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        return out.stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def os_name():
+    try:
+        with open("/etc/os-release") as f:
+            for line in f:
+                if line.startswith("PRETTY_NAME="):
+                    return line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return "desconhecido"
+
+
+def meminfo():
+    info = {}
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                key, _, rest = line.partition(":")
+                info[key] = int(rest.split()[0])  # kB
+    except (OSError, ValueError, IndexError):
+        pass
+    return info
+
+
+def memory():
+    m = meminfo()
+    total = m.get("MemTotal", 0)
+    avail = m.get("MemAvailable", 0)
+    used = max(total - avail, 0)
+    swap_total = m.get("SwapTotal", 0)
+    swap_used = max(swap_total - m.get("SwapFree", 0), 0)
+    return {
+        "total_mb": round(total / 1024),
+        "used_mb": round(used / 1024),
+        "available_mb": round(avail / 1024),
+        "used_pct": round(used * 100 / total, 1) if total else 0.0,
+        "swap_total_mb": round(swap_total / 1024),
+        "swap_used_mb": round(swap_used / 1024),
+    }
+
+
+def uptime_text():
+    try:
+        with open("/proc/uptime") as f:
+            secs = int(float(f.read().split()[0]))
+    except (OSError, ValueError):
+        return "?"
+    d, rem = divmod(secs, 86400)
+    h, rem = divmod(rem, 3600)
+    mnt = rem // 60
+    parts = []
+    if d:
+        parts.append(f"{d}d")
+    if h or d:
+        parts.append(f"{h}h")
+    parts.append(f"{mnt}min")
+    return " ".join(parts)
+
+
+def disks():
+    result = []
+    seen = set()
+    for path in ("/", "/srv"):
+        try:
+            u = shutil.disk_usage(path)
+            dev = os.stat(path).st_dev
+        except OSError:
+            continue
+        if dev in seen:  # /srv no mesmo disco que / não precisa repetir
+            continue
+        seen.add(dev)
+        result.append({
+            "path": path,
+            "total_gb": round(u.total / 1024 ** 3, 1),
+            "used_gb": round(u.used / 1024 ** 3, 1),
+            "used_pct": round(u.used * 100 / u.total, 1) if u.total else 0.0,
+        })
+    return result
+
+
+def top_processes(n):
+    procs = []
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            name, rss = "?", 0
+            with open(f"/proc/{pid}/status") as f:
+                for line in f:
+                    if line.startswith("Name:"):
+                        name = line.split()[1]
+                    elif line.startswith("VmRSS:"):
+                        rss = int(line.split()[1])
+            if rss:
+                procs.append({"pid": int(pid), "name": name, "rss_mb": round(rss / 1024, 1)})
+        except (OSError, ValueError, IndexError):
+            continue
+    procs.sort(key=lambda p: p["rss_mb"], reverse=True)
+    return procs[:n]
+
+
+def listening_ports():
+    ports = set()
+    for line in run(["ss", "-ltnH"]).splitlines():
+        cols = line.split()
+        if len(cols) >= 4:
+            port = cols[3].rsplit(":", 1)[-1]
+            if port.isdigit():
+                ports.add(int(port))
+    return sorted(ports)
+
+
+def failed_units():
+    names = []
+    for line in run(["systemctl", "--failed", "--no-legend", "--plain"]).splitlines():
+        cols = line.split()
+        if cols:
+            names.append(cols[0])
+    return names
+
+
+def app_units():
+    apps = []
+    out = run(["systemctl", "list-units", "nb-*.service", "--all", "--no-legend", "--plain"])
+    for line in out.splitlines():
+        cols = line.split()
+        if len(cols) >= 4:
+            apps.append({"name": cols[0][3:-len(".service")], "state": cols[2]})
+    return apps
+
+
+def collect(top_n):
+    load = os.getloadavg()
+    data = {
+        "host": socket.gethostname(),
+        "os": os_name(),
+        "uptime": uptime_text(),
+        "cpus": os.cpu_count() or 1,
+        "load": [round(x, 2) for x in load],
+        "memory": memory(),
+        "disks": disks(),
+        "top": top_processes(top_n),
+        "ports": listening_ports(),
+        "failed_units": failed_units(),
+        "apps": app_units(),
+    }
+    warnings = []
+    if data["memory"]["used_pct"] >= WARN_MEM:
+        warnings.append(f"memória em {data['memory']['used_pct']}%")
+    for d in data["disks"]:
+        if d["used_pct"] >= WARN_DISK:
+            warnings.append(f"disco {d['path']} em {d['used_pct']}%")
+    if load[0] > data["cpus"] * 1.5:
+        warnings.append(f"carga alta ({load[0]:.2f} para {data['cpus']} CPUs)")
+    for u in data["failed_units"]:
+        warnings.append(f"serviço com falha: {u}")
+    for a in data["apps"]:
+        if a["state"] == "failed":
+            warnings.append(f"app com falha: {a['name']}")
+    data["warnings"] = warnings
+    return data
+
+
+def render(d, color):
+    def c(code, text):
+        return f"\033[{code}m{text}\033[0m" if color else text
+
+    bold = lambda t: c("1", t)
+    ok = lambda t: c("32", t)
+    bad = lambda t: c("31", t)
+
+    m = d["memory"]
+    lines = [
+        bold(f"{d['os']}  ·  {d['host']}"),
+        f"Ligado há {d['uptime']}   Carga {' '.join(map(str, d['load']))}  ({d['cpus']} CPUs)",
+        "",
+        bold("Memória"),
+        f"  {m['used_mb']} / {m['total_mb']} MB usados ({m['used_pct']}%)   livres: {m['available_mb']} MB",
+    ]
+    if m["swap_total_mb"]:
+        lines.append(f"  Swap: {m['swap_used_mb']} / {m['swap_total_mb']} MB")
+    lines += ["", bold("Disco")]
+    for x in d["disks"]:
+        lines.append(f"  {x['path']:<6} {x['used_gb']} / {x['total_gb']} GB ({x['used_pct']}%)")
+    lines += ["", bold("Maiores consumidores de memória")]
+    for p in d["top"]:
+        lines.append(f"  {p['rss_mb']:>8.1f} MB  {p['name']} ({p['pid']})")
+    lines += ["", bold("Portas escutando"), "  " + (", ".join(map(str, d["ports"])) or "nenhuma")]
+    lines += ["", bold("Apps Node.js")]
+    if d["apps"]:
+        for a in d["apps"]:
+            mark = ok("●") if a["state"] == "active" else bad("●")
+            lines.append(f"  {mark} {a['name']}  ({a['state']})")
+    else:
+        lines.append("  nenhum (crie com: nb app create meu-app)")
+    lines.append("")
+    if d["warnings"]:
+        lines.append(bad("Atenção:"))
+        lines += [f"  - {w}" for w in d["warnings"]]
+    else:
+        lines.append(ok("Tudo certo."))
+    return "\n".join(lines)
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Resumo de saúde do servidor NodeBox")
+    ap.add_argument("--json", action="store_true", help="saída em JSON")
+    ap.add_argument("--top", type=int, default=5, help="quantos processos listar (padrão 5)")
+    args = ap.parse_args()
+
+    data = collect(max(args.top, 0))
+    if args.json:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+    else:
+        print(render(data, sys.stdout.isatty()))
+    return 1 if data["warnings"] else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,517 @@
+#!/bin/bash
+# nb — ferramenta de administração da NodeBox
+# Uso: nb ajuda
+set -uo pipefail
+
+NB_VERSION="0.5.1.b"
+APPS_DIR="/srv/apps"
+APP_USER="node"
+UNIT_PREFIX="nb-"
+ARGS=("$@")
+
+if [ -t 1 ]; then
+    C_OK=$'\e[32m'; C_ERR=$'\e[31m'; C_DIM=$'\e[2m'; C_B=$'\e[1m'; C_0=$'\e[0m'
+else
+    C_OK=""; C_ERR=""; C_DIM=""; C_B=""; C_0=""
+fi
+
+say()  { printf '%s\n' "$*"; }
+ok()   { printf '%s✔%s %s\n' "$C_OK" "$C_0" "$*"; }
+warn() { printf '%s!%s %s\n' "$C_DIM" "$C_0" "$*" >&2; }
+die()  { printf '%s✖%s %s\n' "$C_ERR" "$C_0" "$*" >&2; exit 1; }
+
+need_root() {
+    [ "$(id -u)" -eq 0 ] && return 0
+    command -v sudo >/dev/null 2>&1 || die "Rode como root."
+    exec sudo -- "$0" "${ARGS[@]}"
+}
+
+real_user() { echo "${SUDO_USER:-$(id -un)}"; }
+real_home() { getent passwd "$(real_user)" | cut -d: -f6; }
+
+valid_name()   { [[ "${1:-}" =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]]; }
+valid_port()   { [[ "${1:-}" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
+valid_number() { [[ "${1:-}" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ]; }
+valid_domain() { [[ "${1:-}" =~ ^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$ ]]; }
+
+port_in_use() { ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]$1\$"; }
+
+next_port() {
+    local p=3000
+    while port_in_use "$p" || grep -qs "^Environment=PORT=$p\$" /etc/systemd/system/${UNIT_PREFIX}*.service 2>/dev/null; do
+        p=$((p + 1))
+    done
+    echo "$p"
+}
+
+unit_of() { echo "${UNIT_PREFIX}$1.service"; }
+unit_path() { echo "/etc/systemd/system/$(unit_of "$1")"; }
+
+require_app() {
+    valid_name "${1:-}" || die "Informe o nome do app (ex.: nb app $2 minha-api)"
+    [ -f "$(unit_path "$1")" ] || die "App '$1' não existe. Veja: nb app list"
+}
+
+# ---------------------------------------------------------------- ajuda
+usage() {
+    cat <<EOF
+${C_B}nb${C_0} — administração da NodeBox ${NB_VERSION}
+
+${C_B}Sistema${C_0}
+  nb status               resumo de memória, disco, portas e serviços
+  nb info                 versões instaladas
+  nb mem [N]              os N processos que mais usam memória (padrão 10)
+  nb net                  IPs, rota e portas abertas
+  nb update               atualiza os pacotes do sistema
+  nb install <pacote>     instala extras: fail2ban certbot build-tools pm2
+                          sqlite redis postgres mariadb docker wget vim btop
+  nb swap create <2G>|off|status
+
+${C_B}Apps Node.js${C_0} (rodam como serviço systemd, sem daemon extra)
+  nb app create <nome> [--port N] [--mem MB] [--entry arquivo.js]
+  nb app list
+  nb app start|stop|restart|status <nome>
+  nb app logs <nome> [-f]
+  nb app rm <nome> [--purge]
+
+${C_B}Web${C_0}
+  nb proxy add <dominio> <porta>     cria site no nginx apontando para o app
+  nb proxy rm <dominio>
+  nb proxy list
+  nb ssl <dominio> [email]           instala o certbot se preciso e emite o certificado
+
+${C_B}Segurança${C_0}
+  nb fw setup|status|allow <porta>|deny <porta>|off
+  nb ssh addkey "<chave pública>"
+  nb ssh harden                      desliga login por senha (cadastre a chave antes!)
+
+${C_B}Backup${C_0}
+  nb backup [pasta-destino]          compacta /srv/apps (sem node_modules)
+EOF
+}
+
+# ---------------------------------------------------------------- status / info
+cmd_status() {
+    if command -v nb-health >/dev/null 2>&1; then
+        exec nb-health "$@"
+    fi
+    die "nb-health não encontrado."
+}
+
+cmd_info() {
+    # shellcheck disable=SC1091
+    . /etc/os-release 2>/dev/null || true
+    say "Sistema : ${PRETTY_NAME:-?}"
+    say "Kernel  : $(uname -r) ($(uname -m))"
+    say "Host    : $(hostname)"
+    say "Uptime  : $(uptime -p 2>/dev/null || true)"
+    say "Node    : $(node -v 2>/dev/null || echo 'não instalado')"
+    say "npm     : $(npm -v 2>/dev/null || echo 'não instalado')"
+    say "nginx   : $(nginx -v 2>&1 | sed 's/.*\///' || true)"
+    say "Python  : $(python3 -V 2>/dev/null | awk '{print $2}')"
+}
+
+cmd_mem() {
+    local n="${1:-10}"
+    valid_number "$n" || n=10
+    printf '%-8s %-12s %8s  %s\n' PID USUARIO MB COMANDO
+    ps -eo pid=,user=,rss=,comm= --sort=-rss | head -n "$n" |
+        awk '{printf "%-8s %-12s %8.1f  %s\n", $1, $2, $3/1024, $4}'
+    echo
+    free -m | awk 'NR==1{print} NR==2{print} NR==3{print}'
+}
+
+cmd_net() {
+    say "${C_B}Endereços${C_0}"
+    ip -brief addr 2>/dev/null
+    echo
+    say "${C_B}Rota padrão${C_0}"
+    ip route 2>/dev/null | head -n 1
+    echo
+    say "${C_B}Portas escutando${C_0}"
+    if [ "$(id -u)" -eq 0 ]; then ss -tulpn 2>/dev/null; else ss -tuln 2>/dev/null; fi
+}
+
+cmd_update() {
+    need_root
+    apt-get update && apt-get -y upgrade && apt-get -y autoremove --purge && apt-get clean
+    ok "Sistema atualizado."
+}
+
+cmd_install() {
+    need_root
+    local what="${1:-}" pkgs=""
+    case "$what" in
+        fail2ban)    pkgs="fail2ban" ;;
+        certbot)     pkgs="certbot python3-certbot-nginx" ;;
+        build-tools) pkgs="build-essential" ;;
+        sqlite)      pkgs="sqlite3" ;;
+        redis)       pkgs="redis-server" ;;
+        postgres)    pkgs="postgresql" ;;
+        mariadb)     pkgs="mariadb-server" ;;
+        docker)      pkgs="docker.io" ;;
+        wget)        pkgs="wget" ;;
+        vim)         pkgs="vim-tiny" ;;
+        btop)        pkgs="btop" ;;
+        pm2)
+            warn "O pm2 mantém um daemon sempre ligado (~50 MB). Prefira: nb app create."
+            npm install -g pm2 && ok "pm2 instalado."
+            return
+            ;;
+        *) die "Pacote desconhecido. Opções: fail2ban certbot build-tools pm2 sqlite redis postgres mariadb docker wget vim btop" ;;
+    esac
+    apt-get update && apt-get install -y --no-install-recommends $pkgs && ok "$what instalado."
+}
+
+# ---------------------------------------------------------------- swap
+cmd_swap() {
+    need_root
+    local sub="${1:-status}" size="${2:-}"
+    case "$sub" in
+        status)
+            swapon --show
+            free -m | awk 'NR==1||/Swap/'
+            ;;
+        create)
+            local fs
+            fs="$(findmnt -no FSTYPE / 2>/dev/null)"
+            case "$fs" in overlay|tmpfs|aufs)
+                die "O sistema está em modo live (raiz em RAM). Swap só faz sentido depois de instalar em disco." ;;
+            esac
+            [[ "$size" =~ ^[0-9]+[MG]$ ]] || die "Informe o tamanho, ex.: nb swap create 2G"
+            [ -f /swapfile ] && die "/swapfile já existe. Use: nb swap off"
+            fallocate -l "$size" /swapfile || die "Falha ao alocar $size."
+            chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile
+            grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+            ok "Swap de $size ativo."
+            ;;
+        off)
+            swapoff /swapfile 2>/dev/null || true
+            rm -f /swapfile
+            sed -i '\|^/swapfile |d' /etc/fstab
+            ok "Swap removido."
+            ;;
+        *) die "Uso: nb swap create <2G> | off | status" ;;
+    esac
+}
+
+# ---------------------------------------------------------------- apps
+app_create() {
+    need_root
+    local name="${1:-}"
+    valid_name "$name" || die "Nome inválido. Use minúsculas, números, - ou _ (ex.: minha-api)."
+    shift
+    local port="" mem=512 entry=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --port)  [ $# -ge 2 ] || die "--port precisa de um valor"; port="$2"; shift 2 ;;
+            --mem)   [ $# -ge 2 ] || die "--mem precisa de um valor (MB)"; mem="$2"; shift 2 ;;
+            --entry) [ $# -ge 2 ] || die "--entry precisa de um arquivo"; entry="$2"; shift 2 ;;
+            *) die "Opção desconhecida: $1" ;;
+        esac
+    done
+
+    [ -f "$(unit_path "$name")" ] && die "App '$name' já existe."
+    [ -n "$port" ] || port="$(next_port)"
+    valid_port "$port" || die "Porta inválida: $port"
+    valid_number "$mem" || die "Memória inválida: $mem"
+
+    local dir="$APPS_DIR/$name"
+    mkdir -p "$dir"
+
+    if [ -z "$entry" ]; then
+        if [ -f "$dir/package.json" ]; then
+            entry="$(cd "$dir" && node -p "require('./package.json').main || ''" 2>/dev/null || true)"
+        fi
+        if [ -z "$entry" ]; then
+            for f in server.js index.js app.js main.js; do
+                [ -f "$dir/$f" ] && { entry="$f"; break; }
+            done
+        fi
+    fi
+
+    if [ -z "$entry" ]; then
+        entry="server.js"
+        cat > "$dir/server.js" <<'EOF'
+const http = require('http');
+const port = process.env.PORT || 3000;
+
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end('NodeBox: app __NAME__ funcionando!\n');
+}).listen(port, '127.0.0.1', () => console.log('Escutando na porta ' + port));
+EOF
+        sed -i "s/__NAME__/$name/" "$dir/server.js"
+        ok "Criei um server.js de exemplo em $dir"
+    fi
+    [ -f "$dir/$entry" ] || die "Arquivo de entrada não encontrado: $dir/$entry"
+
+    chown -R "$APP_USER:$APP_USER" "$dir"
+
+    local heap=$((mem * 3 / 4))
+    cat > "$(unit_path "$name")" <<EOF
+[Unit]
+Description=NodeBox app $name
+After=network.target
+
+[Service]
+Type=simple
+User=$APP_USER
+WorkingDirectory=$dir
+Environment=NODE_ENV=production
+Environment=PORT=$port
+Environment=NODE_OPTIONS=--max-old-space-size=$heap
+EnvironmentFile=-$dir/.env
+ExecStart=/usr/bin/node $entry
+Restart=always
+RestartSec=2
+MemoryMax=${mem}M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable --now "$(unit_of "$name")" >/dev/null 2>&1
+    sleep 1
+    ok "App '$name' criado e iniciado (porta $port, limite ${mem} MB)."
+    say "  Pasta : $dir"
+    say "  Logs  : nb app logs $name -f"
+    say "  Site  : nb proxy add seu.dominio.com $port"
+}
+
+app_list() {
+    local f name state port mem found=0
+    printf '%-20s %-10s %-6s %s\n' APP ESTADO PORTA MEMORIA
+    for f in /etc/systemd/system/${UNIT_PREFIX}*.service; do
+        [ -f "$f" ] || continue
+        found=1
+        name="$(basename "$f" .service)"; name="${name#"$UNIT_PREFIX"}"
+        state="$(systemctl is-active "$(unit_of "$name")" 2>/dev/null)"
+        port="$(sed -n 's/^Environment=PORT=//p' "$f")"
+        mem="$(sed -n 's/^MemoryMax=//p' "$f")"
+        printf '%-20s %-10s %-6s %s\n' "$name" "$state" "$port" "$mem"
+    done
+    [ "$found" -eq 1 ] || say "(nenhum app ainda — crie com: nb app create meu-app)"
+}
+
+app_ctl() {
+    need_root
+    local action="$1"; shift
+    require_app "${1:-}" "$action"
+    case "$action" in
+        status) systemctl status --no-pager "$(unit_of "$1")" ;;
+        *)      systemctl "$action" "$(unit_of "$1")" && ok "$1: $action" ;;
+    esac
+}
+
+app_logs() {
+    need_root
+    require_app "${1:-}" logs
+    local name="$1"; shift
+    if [ "${1:-}" = "-f" ]; then
+        journalctl -u "$(unit_of "$name")" -n 50 -f
+    else
+        journalctl -u "$(unit_of "$name")" -n 100 --no-pager
+    fi
+}
+
+app_rm() {
+    need_root
+    require_app "${1:-}" rm
+    local name="$1" purge=0
+    [ "${2:-}" = "--purge" ] && purge=1
+    read -r -p "Remover o app '$name'$([ $purge -eq 1 ] && echo ' e a pasta com os arquivos')? [s/N] " ans
+    [[ "$ans" =~ ^[sSyY]$ ]] || { say "Cancelado."; return; }
+    systemctl disable --now "$(unit_of "$name")" >/dev/null 2>&1 || true
+    rm -f "$(unit_path "$name")"
+    systemctl daemon-reload
+    [ $purge -eq 1 ] && rm -rf "${APPS_DIR:?}/$name"
+    ok "App '$name' removido."
+}
+
+cmd_app() {
+    local sub="${1:-}"
+    [ $# -gt 0 ] && shift
+    case "$sub" in
+        create)                          app_create "$@" ;;
+        list|ls)                         app_list ;;
+        start|stop|restart|status|enable|disable) app_ctl "$sub" "$@" ;;
+        logs)                            app_logs "$@" ;;
+        rm|remove)                       app_rm "$@" ;;
+        *) die "Uso: nb app create|list|start|stop|restart|status|logs|rm  (veja: nb ajuda)" ;;
+    esac
+}
+
+# ---------------------------------------------------------------- proxy / ssl
+proxy_site() { echo "/etc/nginx/sites-available/${UNIT_PREFIX}$1"; }
+
+proxy_add() {
+    need_root
+    local domain="${1:-}" port="${2:-}"
+    valid_domain "$domain" || die "Domínio inválido (ex.: api.meusite.com)."
+    valid_port "$port" || die "Informe a porta do app (ex.: nb proxy add $domain 3000)."
+    command -v nginx >/dev/null 2>&1 || die "nginx não está instalado."
+
+    cat > "$(proxy_site "$domain")" <<'EOF'
+server {
+    listen 80;
+    server_name __DOMAIN__;
+
+    location / {
+        proxy_pass http://127.0.0.1:__PORT__;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+EOF
+    sed -i "s/__DOMAIN__/$domain/; s/__PORT__/$port/" "$(proxy_site "$domain")"
+    ln -sf "$(proxy_site "$domain")" "/etc/nginx/sites-enabled/${UNIT_PREFIX}$domain"
+    if nginx -t >/dev/null 2>&1; then
+        systemctl reload nginx
+        ok "$domain → 127.0.0.1:$port"
+        say "  HTTPS: nb ssl $domain seu@email.com"
+    else
+        rm -f "/etc/nginx/sites-enabled/${UNIT_PREFIX}$domain" "$(proxy_site "$domain")"
+        nginx -t
+        die "Configuração inválida; removi o site."
+    fi
+}
+
+proxy_rm() {
+    need_root
+    local domain="${1:-}"
+    valid_domain "$domain" || die "Informe o domínio."
+    [ -f "$(proxy_site "$domain")" ] || die "Não há site criado pelo nb para $domain."
+    rm -f "/etc/nginx/sites-enabled/${UNIT_PREFIX}$domain" "$(proxy_site "$domain")"
+    nginx -t >/dev/null 2>&1 && systemctl reload nginx
+    ok "Site $domain removido."
+}
+
+proxy_list() {
+    local f found=0
+    for f in /etc/nginx/sites-available/${UNIT_PREFIX}*; do
+        [ -f "$f" ] || continue
+        found=1
+        printf '%-35s %s\n' "$(basename "$f" | sed "s/^${UNIT_PREFIX}//")" \
+            "$(grep -o 'proxy_pass [^;]*' "$f" | head -n 1 | awk '{print $2}')"
+    done
+    [ "$found" -eq 1 ] || say "(nenhum site criado pelo nb)"
+}
+
+cmd_proxy() {
+    local sub="${1:-}"
+    [ $# -gt 0 ] && shift
+    case "$sub" in
+        add)       proxy_add "$@" ;;
+        rm|remove) proxy_rm "$@" ;;
+        list|ls)   proxy_list ;;
+        *) die "Uso: nb proxy add <dominio> <porta> | rm <dominio> | list" ;;
+    esac
+}
+
+cmd_ssl() {
+    need_root
+    local domain="${1:-}" email="${2:-}"
+    valid_domain "$domain" || die "Uso: nb ssl <dominio> [email]"
+    [ -f "$(proxy_site "$domain")" ] || die "Crie o site antes: nb proxy add $domain <porta>"
+    if ! command -v certbot >/dev/null 2>&1; then
+        say "Instalando o certbot..."
+        apt-get update && apt-get install -y --no-install-recommends certbot python3-certbot-nginx || die "Falha ao instalar o certbot."
+    fi
+    local mail_opt=(--register-unsafely-without-email)
+    [ -n "$email" ] && mail_opt=(-m "$email")
+    certbot --nginx -d "$domain" --non-interactive --agree-tos --redirect "${mail_opt[@]}"
+}
+
+# ---------------------------------------------------------------- firewall / ssh
+cmd_fw() {
+    need_root
+    command -v ufw >/dev/null 2>&1 || die "ufw não está instalado."
+    local sub="${1:-status}"
+    case "$sub" in
+        setup)
+            ufw default deny incoming
+            ufw default allow outgoing
+            ufw allow 22/tcp
+            ufw allow 80/tcp
+            ufw allow 443/tcp
+            ufw --force enable
+            ok "Firewall ativo: liberadas as portas 22, 80 e 443."
+            ;;
+        status) ufw status verbose ;;
+        allow)  valid_port "${2%%/*}" || die "Uso: nb fw allow <porta>[/tcp|udp]"; ufw allow "$2" ;;
+        deny)   valid_port "${2%%/*}" || die "Uso: nb fw deny <porta>[/tcp|udp]"; ufw deny "$2" ;;
+        off)    ufw --force disable ;;
+        *) die "Uso: nb fw setup|status|allow <porta>|deny <porta>|off" ;;
+    esac
+}
+
+cmd_ssh() {
+    need_root
+    local sub="${1:-}" user home ak
+    user="$(real_user)"; [ "$user" = "root" ] && user="$APP_USER"
+    home="$(getent passwd "$user" | cut -d: -f6)"
+    ak="$home/.ssh/authorized_keys"
+    case "$sub" in
+        addkey)
+            local key="${2:-}"
+            [[ "$key" =~ ^(ssh-|ecdsa-|sk-) ]] || die "Cole a chave pública inteira entre aspas (começa com ssh-ed25519, ssh-rsa...)."
+            install -d -m 700 -o "$user" -g "$user" "$home/.ssh"
+            touch "$ak"
+            grep -qxF "$key" "$ak" || echo "$key" >> "$ak"
+            chown "$user:$user" "$ak"; chmod 600 "$ak"
+            ok "Chave cadastrada para $user."
+            ;;
+        harden)
+            [ -s "$ak" ] || die "Nenhuma chave em $ak. Cadastre antes: nb ssh addkey \"<chave>\""
+            printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' > /etc/ssh/sshd_config.d/98-nodebox-keyonly.conf
+            if sshd -t; then
+                systemctl reload ssh
+                ok "Login por senha desligado. Teste uma nova conexão ANTES de fechar esta."
+            else
+                rm -f /etc/ssh/sshd_config.d/98-nodebox-keyonly.conf
+                die "Configuração do SSH inválida; desfiz a mudança."
+            fi
+            ;;
+        *) die "Uso: nb ssh addkey \"<chave>\" | harden" ;;
+    esac
+}
+
+# ---------------------------------------------------------------- backup
+cmd_backup() {
+    local dest="${1:-$(real_home)/backups}" file
+    mkdir -p "$dest" || die "Não consegui criar $dest"
+    file="$dest/nodebox-apps-$(date +%F-%H%M).tar.gz"
+    tar czf "$file" --exclude='node_modules' -C "$(dirname "$APPS_DIR")" "$(basename "$APPS_DIR")" || die "Falha no backup."
+    ok "Backup criado: $file ($(du -h "$file" | cut -f1))"
+}
+
+# ---------------------------------------------------------------- main
+cmd="${1:-ajuda}"
+[ $# -gt 0 ] && shift
+case "$cmd" in
+    ajuda|help|-h|--help) usage ;;
+    version|-v|--version) say "nb (NodeBox $NB_VERSION)" ;;
+    status|st)  cmd_status "$@" ;;
+    info)       cmd_info ;;
+    mem)        cmd_mem "$@" ;;
+    net)        cmd_net ;;
+    update)     cmd_update ;;
+    install)    cmd_install "$@" ;;
+    swap)       cmd_swap "$@" ;;
+    app|apps)   cmd_app "$@" ;;
+    proxy)      cmd_proxy "$@" ;;
+    ssl)        cmd_ssl "$@" ;;
+    fw)         cmd_fw "$@" ;;
+    ssh)        cmd_ssh "$@" ;;
+    backup)     cmd_backup "$@" ;;
+    *) warn "Comando desconhecido: $cmd"; usage; exit 1 ;;
+esac

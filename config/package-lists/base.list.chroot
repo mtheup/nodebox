@@ -1,52 +1,43 @@
-# --- Sistema base / servidor ---
+# NodeBox 0.5.1.b — só o necessário para um servidor Node.js enxuto
+# (comentários aqui não afetam o build; precisam estar em linhas próprias)
+
+# --- Acesso e administração ---
 openssh-server
 sudo
 curl
-wget
-git
 ca-certificates
-gnupg
-htop
-btop
-tmux
-vim-tiny
+git
 nano
-unzip
-rsync
-jq
-net-tools
-dnsutils
+less
+tmux
+htop
 iproute2
+iputils-ping
 ufw
-fail2ban
-unattended-upgrades
-chrony
-logrotate
-build-essential
-python3
-ncurses-term
+console-setup
+keyboard-configuration
+
+# --- Rede e hora (leves, sem NetworkManager/chrony) ---
+systemd-resolved
+systemd-timesyncd
 
 # --- Node.js ---
 nodejs
 npm
 
-# --- Proxy reverso e SSL ---
+# --- Proxy reverso ---
 nginx
-certbot
-python3-certbot-nginx
 
-# --- Banco opcional leve (comente se não quiser) ---
-sqlite3
+# --- Ferramentas nb (nb-health usa Python, só biblioteca padrão) ---
+python3
 
-# --- Interface mínima i3 (para uso local/depuração) ---
-xorg
+# --- i3 mínimo (sem gerenciador de login e sem navegador) ---
+xserver-xorg-core
+xserver-xorg-input-libinput
 xinit
 i3-wm
 i3status
 i3lock
 dmenu
 rxvt-unicode
-lightdm
-firefox-esr
 fonts-dejavu-core
-network-manager

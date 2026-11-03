@@ -1,0 +1,115 @@
+#!/bin/sh
+# Adiciona a entrada "Live CLI" (sem i3) nos menus de boot GRUB e isolinux.
+# Roda fora do chroot, com a ISO em montagem na pasta binary/.
+# A entrada nova é um clone da primeira entrada "Live" normal, com nbmode=cli no final.
+# Se algo não casar, o build continua normalmente (só não aparece a opção).
+
+TITLE="Live CLI (sem interface grafica)"
+
+[ -d binary ] || { echo "[nodebox] pasta binary/ nao encontrada; pulando Live CLI"; exit 0; }
+
+add_grub() {
+    f="$1"
+    grep -q 'boot=live' "$f" 2>/dev/null || return 0
+    grep -q 'nbmode=cli' "$f" && return 0
+    tmp="$f.nb"
+    awk -v title="$TITLE" '
+    function live_ok(b) {
+        return (b ~ /boot=live/) && (b !~ /fail-?safe/) && (b !~ /persisten/) && (b !~ /toram/)
+    }
+    BEGIN { inblk = 0; done = 0 }
+    {
+        if (!inblk && !done && $0 ~ /^[ \t]*menuentry[ \t]/) {
+            inblk = 1; blk = $0 "\n"; next
+        }
+        if (inblk) {
+            blk = blk $0 "\n"
+            if ($0 ~ /^[ \t]*}[ \t]*$/) {
+                inblk = 0
+                printf "%s", blk
+                if (live_ok(blk)) {
+                    done = 1
+                    n = split(blk, L, "\n")
+                    for (i = 1; i < n; i++) {
+                        line = L[i]
+                        if (i == 1) {
+                            match(line, /^[ \t]*/)
+                            print substr(line, 1, RLENGTH) "menuentry \"" title "\" {"
+                            continue
+                        }
+                        if (line ~ /boot=live/) line = line " nbmode=cli"
+                        print line
+                    }
+                }
+            }
+            next
+        }
+        print
+    }
+    END { if (inblk) printf "%s", blk }
+    ' "$f" > "$tmp"
+    if grep -q 'nbmode=cli' "$tmp"; then
+        mv "$tmp" "$f"
+        echo "[nodebox] Live CLI adicionado em $f (GRUB)"
+    else
+        rm -f "$tmp"
+    fi
+}
+
+add_syslinux() {
+    f="$1"
+    grep -q 'boot=live' "$f" 2>/dev/null || return 0
+    grep -q 'nbmode=cli' "$f" && return 0
+    tmp="$f.nb"
+    awk -v title="$TITLE" '
+    function live_ok(b) {
+        return (b ~ /append[^\n]*boot=live/) && (b !~ /fail-?safe/) && (b !~ /persisten/) && (b !~ /toram/)
+    }
+    function flush(   n, i, L, line) {
+        if (!have) return
+        printf "%s", blk
+        if (!done && live_ok(blk)) {
+            done = 1
+            n = split(blk, L, "\n")
+            for (i = 1; i < n; i++) {
+                line = L[i]
+                if (line ~ /^[ \t]*label[ \t]/)          { print "label live-cli"; continue }
+                if (line ~ /^[ \t]*menu[ \t]+label/)     { print "\tmenu label ^" title; continue }
+                if (line ~ /^[ \t]*menu[ \t]+default/)   { continue }
+                if (line ~ /^[ \t]*append[ \t]/ && line ~ /boot=live/) line = line " nbmode=cli"
+                print line
+            }
+        }
+        have = 0; blk = ""
+    }
+    BEGIN { have = 0; done = 0 }
+    {
+        if ($0 ~ /^[ \t]*label[ \t]/) { flush(); have = 1; blk = $0 "\n"; next }
+        if (have) { blk = blk $0 "\n"; next }
+        print
+    }
+    END { flush() }
+    ' "$f" > "$tmp"
+    if grep -q 'nbmode=cli' "$tmp"; then
+        mv "$tmp" "$f"
+        echo "[nodebox] Live CLI adicionado em $f (isolinux)"
+    else
+        rm -f "$tmp"
+    fi
+}
+
+for f in binary/boot/grub/*.cfg; do
+    [ -f "$f" ] && add_grub "$f"
+done
+
+for d in binary/isolinux binary/syslinux; do
+    for f in "$d"/*.cfg; do
+        [ -f "$f" ] && add_syslinux "$f"
+    done
+done
+
+if ! grep -rqs 'nbmode=cli' binary/boot binary/isolinux binary/syslinux 2>/dev/null; then
+    echo "[nodebox] AVISO: nao consegui adicionar a entrada Live CLI (formato do menu diferente do esperado)"
+fi
+
+exit 0

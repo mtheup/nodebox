@@ -1,0 +1,15 @@
+#!/bin/sh
+# Serviços: liga só o necessário e desliga o que consome memória/CPU à toa
+set -e
+
+for u in ssh nginx systemd-networkd systemd-resolved systemd-timesyncd; do
+    systemctl enable "$u" || true
+done
+
+# Timers que acordam o sistema sem necessidade (atualizações são manuais: nb update)
+for u in apt-daily.timer apt-daily-upgrade.timer man-db.timer e2scrub_all.timer; do
+    systemctl mask "$u" || true
+done
+
+# O firewall é configurado depois do boot (não dá para ativar o ufw dentro do chroot)
+# Use: nb fw setup

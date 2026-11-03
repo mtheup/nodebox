@@ -21,7 +21,7 @@ echo ">> Instalando dependências de build..."
 apt-get update
 apt-get install -y $PKGS
 
-chmod +x auto/config config/hooks/live/*.hook.chroot
+chmod +x auto/config config/hooks/live/*.hook.* config/includes.chroot/usr/local/bin/*
 
 echo ">> Limpando build anterior..."
 lb clean --purge || true
