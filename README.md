@@ -26,7 +26,7 @@ A ISO sai na pasta `nodebox/` (`nodebox-*.iso`).
 
 ## Primeiro uso
 
-- Usuário: `node` / senha padrão do live-build: `live` — **troque com `passwd`**
+- Usuário: `node` / senha: `node` (tem sudo) — **troque com `passwd`**
 - Teste antes no QEMU: `qemu-system-x86_64 -m 4096 -cdrom nodebox-amd64.hybrid.iso`
 - Para iniciar o i3 no terminal: `startx`
 
