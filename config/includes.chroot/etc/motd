@@ -1,0 +1,15 @@
+
+  _   _           _      ____
+ | \ | | ___   __| | ___| __ )  _____  __
+ |  \| |/ _ \ / _` |/ _ \  _ \ / _ \ \/ /
+ | |\  | (_) | (_| |  __/ |_) | (_) >  <
+ |_| \_|\___/ \__,_|\___|____/ \___/_/\_\
+
+ Servidor Node.js simples  |  Debian 13  |  i3
+
+ Apps:      /srv/apps
+ Processos: pm2 start app.js --name meuapp && pm2 save
+ Proxy:     /etc/nginx/sites-available/
+ SSL:       sudo certbot --nginx -d seu.dominio
+ Firewall:  sudo ufw enable   (SSH, 80 e 443 já liberados)
+

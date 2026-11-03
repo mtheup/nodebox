@@ -1,0 +1,19 @@
+#!/bin/sh
+# Instala ferramentas globais de Node.js dentro da imagem
+set -e
+
+npm install -g pm2 yarn pnpm
+
+# Firewall padrão: libera apenas SSH, HTTP e HTTPS (ativa no primeiro boot)
+ufw default deny incoming || true
+ufw default allow outgoing || true
+ufw allow 22/tcp || true
+ufw allow 80/tcp || true
+ufw allow 443/tcp || true
+
+# Serviços habilitados no boot
+systemctl enable ssh || true
+systemctl enable nginx || true
+systemctl enable fail2ban || true
+systemctl enable chrony || true
+systemctl enable NetworkManager || true

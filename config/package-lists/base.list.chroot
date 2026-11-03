@@ -1,0 +1,52 @@
+# --- Sistema base / servidor ---
+openssh-server
+sudo
+curl
+wget
+git
+ca-certificates
+gnupg
+htop
+btop
+tmux
+vim-tiny
+nano
+unzip
+rsync
+jq
+net-tools
+dnsutils
+iproute2
+ufw
+fail2ban
+unattended-upgrades
+chrony
+logrotate
+build-essential
+python3
+ncurses-term
+
+# --- Node.js ---
+nodejs
+npm
+
+# --- Proxy reverso e SSL ---
+nginx
+certbot
+python3-certbot-nginx
+
+# --- Banco opcional leve (comente se não quiser) ---
+sqlite3
+
+# --- Interface mínima i3 (para uso local/depuração) ---
+xorg
+xinit
+i3-wm
+i3status
+i3lock
+dmenu
+rxvt-unicode
+lightdm
+firefox-esr
+fonts-dejavu-core
+network-manager

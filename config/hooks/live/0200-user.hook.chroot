@@ -1,0 +1,19 @@
+#!/bin/sh
+# Garante diretório de apps e permissões amigáveis para o usuário "node"
+set -e
+
+mkdir -p /srv/apps
+chmod 775 /srv/apps
+
+# Atalho para iniciar o i3 com startx
+cat > /etc/skel/.xinitrc <<'EOF'
+exec i3
+EOF
+
+# Mensagem ao entrar no shell
+cat >> /etc/skel/.bashrc <<'EOF'
+
+alias ll='ls -lah'
+alias logs='pm2 logs'
+alias apps='cd /srv/apps'
+EOF
