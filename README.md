@@ -1,7 +1,8 @@
-# NodeBox 0.5.1.b
+# NodeBox 
 
-Distro enxuta baseada em Debian 13 (trixie), feita para rodar servidores Node.js
-com pouca memória (pensada para 2 vCPU / 12 GB). Construída com `live-build`.
+Seu servidor, seu sistema!
+
+Baseado em Debian 13, Com ferramentas para voce e seu server
 
 ## Entrar
 
