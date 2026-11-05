@@ -31,8 +31,13 @@ nginx
 # --- Ferramentas nb (nb-health usa Python, só biblioteca padrão) ---
 python3
 
+# --- Sessão de usuário (necessário para o X rodar sem root) ---
+dbus
+libpam-systemd
+
 # --- i3 mínimo (sem gerenciador de login e sem navegador) ---
 xserver-xorg-core
+xserver-xorg-legacy
 xserver-xorg-input-libinput
 xinit
 i3-wm

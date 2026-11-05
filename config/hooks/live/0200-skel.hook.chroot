@@ -5,20 +5,9 @@ set -e
 mkdir -p /srv/apps
 chmod 775 /srv/apps
 
+# O sistema entra direto no terminal. Para abrir o i3, digite: startx
 cat > /etc/skel/.xinitrc <<'EOF'
 exec i3
-EOF
-
-# No tty1 o i3 abre sozinho depois do login. Para pular (modo CLI),
-# escolha "Live CLI" no menu de boot (parâmetro nbmode=cli).
-cat > /etc/skel/.bash_profile <<'EOF'
-[ -f "$HOME/.profile" ] && . "$HOME/.profile"
-
-if [ -z "${DISPLAY:-}" ] && [ "$(tty)" = "/dev/tty1" ] \
-   && ! grep -qw 'nbmode=cli' /proc/cmdline 2>/dev/null \
-   && command -v startx >/dev/null 2>&1; then
-    exec startx
-fi
 EOF
 
 cat >> /etc/skel/.bashrc <<'EOF'

@@ -1,20 +1,17 @@
-# NodeBox 
+# NodeBox 0.5.1.b
 
-Seu servidor, seu sistema!
-
-Baseado em Debian 13, Com ferramentas para voce e seu server
+Distro enxuta baseada em Debian 13 (trixie), feita para rodar servidores Node.js
+com pouca memória (pensada para 2 vCPU / 12 GB). Construída com `live-build`.
 
 ## Entrar
 
 - Usuário: `node` — senha: `node` (tem `sudo`; **troque com `passwd`**)
 - Teclado ABNT2, fuso America/Sao_Paulo
 
-## Menu de boot
+## Interface
 
-- **Live system**: sobe o sistema; no tty1, depois do login, o i3 abre sozinho.
-- **Live CLI (sem interface grafica)**: só terminal, o i3 não é iniciado (parâmetro `nbmode=cli`).
-
-Nos dois modos há um segundo terminal em `Ctrl+Alt+F2` (no VirtualBox: Ctrl direito + F2).
+O sistema entra direto no terminal. Para abrir o i3, digite `startx`.
+Outros terminais: `Ctrl+Alt+F2` (no VirtualBox: Ctrl direito + F2).
 
 ## Ferramentas `nb`
 
@@ -58,6 +55,5 @@ sudo ./build.sh amd64      # ou arm64
 auto/config                              parâmetros do live-build
 config/package-lists/                    pacotes instalados
 config/hooks/live/*.hook.chroot          scripts rodados dentro da imagem (ordem numérica)
-config/hooks/live/0900-live-cli.hook.binary   adiciona "Live CLI" nos menus de boot
 config/includes.chroot/                  arquivos copiados para o sistema (nb, nb-health, i3, systemd, ssh)
 ```
